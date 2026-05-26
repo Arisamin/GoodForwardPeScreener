@@ -58,10 +58,12 @@ def main():
         print(f"Loaded {len(tickers)} tickers.")
     results = []
     total = len(tickers)
+    retry_list = []
     for idx, ticker in enumerate(tickers, 1):
         trailing_pe, forward_pe = fetch_pe_ratios(ticker)
         if trailing_pe is None or forward_pe is None:
-            print(f"[{idx}/{total}] {ticker}: Missing PE data, skipping.")
+            print(f"[{idx}/{total}] {ticker}: Missing PE data, will retry later.")
+            retry_list.append(ticker)
             continue
         try:
             actual_ratio = forward_pe / trailing_pe
@@ -73,15 +75,57 @@ def main():
         if trailing_pe <= 0 or forward_pe <= 0 or actual_ratio < 0:
             print(f"[{idx}/{total}] {ticker}: Negative/zero PE or ratio, skipping.")
             continue
-        if actual_ratio >= targetRatio:
+        mark = "v" if actual_ratio <= targetRatio else ""
+        results.append({
+            'Ticker': ticker,
+            'TrailingPE': trailing_pe,
+            'ForwardPE': forward_pe,
+            'actualRatio': actual_ratio,
+            'MarkAsInteresting': mark
+        })
+        if idx % 20 == 0 or idx == total:
+            print(f"Processed {idx}/{total} tickers...")
+
+    # Retry logic for missing data
+    attempt = 1
+    while retry_list:
+        print(f"\nRetry attempt {attempt}: {len(retry_list)} tickers to retry...")
+        logging.info(f"Retry attempt {attempt}: {len(retry_list)} tickers to retry...")
+        new_retry_list = []
+        for idx, ticker in enumerate(retry_list, 1):
+            trailing_pe, forward_pe = fetch_pe_ratios(ticker)
+            if trailing_pe is None or forward_pe is None:
+                print(f"[Retry {attempt}] {ticker}: Still missing PE data.")
+                new_retry_list.append(ticker)
+                continue
+            try:
+                actual_ratio = forward_pe / trailing_pe
+            except Exception as e:
+                logging.error(f"[Retry {attempt}] {ticker}: Error calculating ratio: {e}")
+                print(f"[Retry {attempt}] {ticker}: Error calculating ratio: {e}")
+                continue
+            if trailing_pe <= 0 or forward_pe <= 0 or actual_ratio < 0:
+                print(f"[Retry {attempt}] {ticker}: Negative/zero PE or ratio, skipping.")
+                continue
+            mark = "v" if actual_ratio <= targetRatio else ""
             results.append({
                 'Ticker': ticker,
                 'TrailingPE': trailing_pe,
                 'ForwardPE': forward_pe,
-                'actualRatio': actual_ratio
+                'actualRatio': actual_ratio,
+                'MarkAsInteresting': mark
             })
-        if idx % 20 == 0 or idx == total:
-            print(f"Processed {idx}/{total} tickers...")
+            print(f"[Retry {attempt}] {ticker}: Successfully obtained data.")
+        if len(new_retry_list) < len(retry_list):
+            print(f"Retry attempt {attempt} reduced retry list from {len(retry_list)} to {len(new_retry_list)}.")
+            logging.info(f"Retry attempt {attempt} reduced retry list from {len(retry_list)} to {len(new_retry_list)}.")
+            retry_list = new_retry_list
+            attempt += 1
+        else:
+            print(f"No further progress in retry attempt {attempt}. Stopping retries.")
+            logging.info(f"No further progress in retry attempt {attempt}. Stopping retries.")
+            break
+
     # Save results to CSV
     now = datetime.now().strftime('%Y%m%d_%H%M%S')
     output_file = f'good_forward_pe_results_{now}.csv'
